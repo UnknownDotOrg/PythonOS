@@ -26,7 +26,7 @@ After that, PythonOS will be running.
 
 Hope you like PythonOS!
 Bye!
-Also, when there's an update of PythonOS, you can download it from the GitHub : [PLACEHOLDER]
+Also, when there's an update of PythonOS, you can download it from the GitHub : https://github.com/UnknownDotOrg/PythonOS
 Unknown out.
 
 
