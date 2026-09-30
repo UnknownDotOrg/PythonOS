@@ -2,7 +2,7 @@ Hi there! It's me again!
 
 # PyOS Module Template
 
-Want to create your own module for **PyOS**?
+Want to create your own module for **PythonOS**?
 
 You've come to the right place!
 
