@@ -6,3 +6,4 @@ Update 0.2.3 : (Final part of Update 2) Added a password for new PyOS Accounts. 
 Update 0.3 : Added two new commands : !! and import -help.
 Update 0.4 : HUGE update right here : i made a module system with the import module. ChatGPT helped me to do that (please don't call me AI slop).
 Update 1.0 : Yeah, huge step up from 0.4 but hey, PythonOS is now on GitHub!!!!! yay woohoo
+Update 1.1 : Added the "what" command and nothing else.
