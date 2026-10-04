@@ -1,11 +1,9 @@
 import time
 import json
 import os
-import importlib.util
 from random import randint
 
 ACCOUNTS_FILE = "accounts.json"
-MODULES_FOLDER = "modules"
 
 
 def load_accounts():
@@ -29,87 +27,8 @@ def generate_account_id(accounts):
             return account_id
 
 
-def load_module(module_name):
-    module_folder = os.path.join(MODULES_FOLDER, module_name)
-    module_file = os.path.join(module_folder, "module.json")
-
-    if not os.path.exists(module_file):
-        return None
-
-    try:
-        with open(module_file, "r") as file:
-            module_data = json.load(file)
-
-        return module_data
-
-    except json.JSONDecodeError:
-        print(f"Error: Module '{module_name}' has invalid JSON.")
-        return None
-
-    except OSError as error:
-        print(f"Error loading module '{module_name}': {error}")
-        return None
-
-
-def execute_module(module_name, module_data):
-    module_folder = os.path.join(MODULES_FOLDER, module_name)
-
-    if "entry" not in module_data:
-        print(f"Error: Module '{module_name}' does not specify an entry file.")
-        return None
-
-    entry_file = os.path.join(module_folder, module_data["entry"])
-
-    if not os.path.exists(entry_file):
-        print(f"Error: Entry file '{module_data['entry']}' was not found.")
-        return None
-
-    try:
-        spec = importlib.util.spec_from_file_location(
-            f"pyos_module_{module_name}",
-            entry_file
-        )
-
-        if spec is None or spec.loader is None:
-            print(f"Error: Could not load module '{module_name}'.")
-            return None
-
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        return module
-
-    except Exception as error:
-        print(f"Error while loading module '{module_name}': {error}")
-        return None
-
-
-def list_modules():
-    if not os.path.exists(MODULES_FOLDER):
-        return []
-
-    modules = []
-
-    for module_name in os.listdir(MODULES_FOLDER):
-        module_folder = os.path.join(MODULES_FOLDER, module_name)
-
-        if not os.path.isdir(module_folder):
-            continue
-
-        module_file = os.path.join(module_folder, "module.json")
-
-        if os.path.exists(module_file):
-            modules.append(module_name)
-
-    return sorted(modules)
-
-
-os.makedirs(MODULES_FOLDER, exist_ok=True)
-
-
 accounts = load_accounts()
 current_account = None
-imported_modules = {}
 
 
 print("Starting PythonOS...")
@@ -147,13 +66,14 @@ while True:
         print("clear         - Clears the screen")
         print("!!            - Activates the emergency protocol. Run this command only in cases of emergencys.")
         print("import -help  - Prints help about the import command")
+        print("what          - WHAT")
 
     elif command == "whoami":
         print("root")
 
     elif command == "about":
-        print("PythonOS v0.4")
-        print("PythonOS is powered by PyTerminal (aka your terminal).")
+        print("PythonOS v1.1")
+        print("PythonOS is powered by PyTerminal.")
         print("PythonOS made by UnknownDotOrg.")
 
     elif command == "exit":
@@ -161,7 +81,7 @@ while True:
         break
 
     elif command == "other":
-        print("Other projects I made.")
+        print("Other projects I made")
         print("NEON RHYTHM - A rhythm game entirely using Python and Pygame.")
         print("useless - A useless Python module.")
         print("amogus - It's a Python module. Why did I make this? I have no idea.")
@@ -253,95 +173,19 @@ while True:
             os.system("cls")
         else:
             os.system("clear")
-
+    
     elif command == "!!":
         print("! EMERGENCY PROTOCOL ACTIVATED !")
         print("Shutting down PythonOS...")
         break
-
+    
     elif command == "import -help":
-        print(" ")
         print("import COMMAND HELP")
-        print(" ")
-        print("import <module>  - Imports a local PyOS module")
-        print("import -list     - Lists installed PyOS modules")
-        print("import -help     - Prints this help")
-        print(" ")
-
-    elif command == "import -list":
-        modules = list_modules()
-
-        print(" ")
-        print("Installed PyOS modules")
-        print(" ")
-
-        if len(modules) == 0:
-            print("No modules are installed.")
-        else:
-            for module_name in modules:
-                print(f"- {module_name}")
-
-        print(" ")
-
-    elif command.startswith("import "):
-        module_name = command[7:].strip()
-
-        if module_name == "":
-            print("Usage: import <module>")
-        else:
-            print(f"Searching for module '{module_name}'...")
-
-            module_data = load_module(module_name)
-
-            if module_data is None:
-                print(f"Module '{module_name}' was not found in the modules/ folder.")
-                print("")
-                continue
-
-            print(f"Module '{module_name}' found!")
-            print("Loading module...")
-
-            module = execute_module(module_name, module_data)
-
-            if module is None:
-                print(f"Module '{module_name}' could not be loaded.")
-                print("")
-                continue
-
-            imported_modules[module_name] = module
-
-            if hasattr(module, "on_import"):
-                try:
-                    module.on_import()
-                except Exception as error:
-                    print(f"Error in module on_import(): {error}")
-
-            print(f"Module '{module_name}' imported successfully!")
-
-            if "name" in module_data:
-                print(f"Name        : {module_data['name']}")
-
-            if "version" in module_data:
-                print(f"Version     : {module_data['version']}")
-
-            if "author" in module_data:
-                print(f"Author      : {module_data['author']}")
-
-            if "description" in module_data:
-                print(f"Description : {module_data['description']}")
+        print("import -help")
+    
+    elif command == "what":
+        print("WHAT")
 
     else:
-        if command in imported_modules:
-            module = imported_modules[command]
-
-            if hasattr(module, "run"):
-                try:
-                    module.run()
-                except Exception as error:
-                    print(f"Error while running module '{command}': {error}")
-            else:
-                print(f"Module '{command}' does not have a run() function.")
-        else:
-            print(f"Command not found: {command}")
-            print("Type 'help' for a list of available commands.")
-
+        print(f"Command not found: {command}")
+        print("Type 'help' for a list of available commands.")
