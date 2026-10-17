@@ -1,9 +1,18 @@
+
 import time
 import json
 import os
+import re
+import sys
+import io
+import importlib.util
+from contextlib import redirect_stdout
 from random import randint
 
 ACCOUNTS_FILE = "accounts.json"
+
+# Modules successfully imported during this PythonOS session.
+loaded_modules = {}
 
 
 def load_accounts():
@@ -27,6 +36,136 @@ def generate_account_id(accounts):
             return account_id
 
 
+def import_module(module_id):
+    # Only allow simple module IDs.
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", module_id):
+        print("Invalid module ID.")
+        return
+
+    if module_id in loaded_modules:
+        print(f"Module '{module_id}' is already imported.")
+        return
+
+    # Find modules relative to this main.py file.
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    module_dir = os.path.realpath(
+        os.path.join(base_dir, "modules", module_id)
+    )
+    modules_dir = os.path.realpath(
+        os.path.join(base_dir, "modules")
+    )
+
+    # Ensure the module directory stays inside modules/.
+    if os.path.commonpath([modules_dir, module_dir]) != modules_dir:
+        print("Invalid module directory.")
+        return
+
+    manifest_path = os.path.join(module_dir, "module.json")
+
+    if not os.path.isfile(manifest_path):
+        print(f"Module '{module_id}' not found.")
+        return
+
+    # Read the module metadata.
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as file:
+            metadata = json.load(file)
+    except (OSError, json.JSONDecodeError) as error:
+        print(f"Could not read module metadata: {error}")
+        return
+
+    if not isinstance(metadata, dict):
+        print("Invalid module metadata: expected a JSON object.")
+        return
+
+    required_fields = ("name", "description", "id", "version", "entry")
+
+    for field in required_fields:
+        if not isinstance(metadata.get(field), str) or not metadata[field]:
+            print(f"Invalid module metadata: missing or invalid '{field}'.")
+            return
+
+    if metadata["id"] != module_id:
+        print("Module ID does not match the requested ID.")
+        return
+
+    # Entry files must be filenames inside the module directory.
+    entry = metadata["entry"]
+
+    if entry in (".", "..") or os.path.basename(entry) != entry:
+        print("Invalid module entry filename.")
+        return
+
+    entry_path = os.path.realpath(os.path.join(module_dir, entry))
+
+    if os.path.commonpath([module_dir, entry_path]) != module_dir:
+        print("Module entry points outside its directory.")
+        return
+
+    if not os.path.isfile(entry_path):
+        print(f"Module entry file not found: {entry}")
+        return
+
+    # Prepare the Python module.
+    python_name = f"_pyos_module_{module_id}"
+
+    try:
+        spec = importlib.util.spec_from_file_location(
+            python_name, entry_path
+        )
+
+        if spec is None or spec.loader is None:
+            print("Could not create a module loader.")
+            return
+
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[python_name] = module
+
+        try:
+            spec.loader.exec_module(module)
+
+            on_import = getattr(module, "on_import", None)
+
+            if on_import is not None and not callable(on_import):
+                raise TypeError("on_import must be a function.")
+
+            # Capture initialization output so a failed initialization
+            # doesn't print a misleading success message first.
+            output = io.StringIO()
+
+            if on_import is not None:
+                with redirect_stdout(output):
+                    on_import()
+
+        except Exception:
+            sys.modules.pop(python_name, None)
+            raise
+
+    except Exception as error:
+        print(f"Module import failed: {error}")
+        return
+
+    # Register only after loading and initialization succeed.
+    loaded_modules[module_id] = {
+        "module": module,
+        "metadata": metadata,
+        "python_name": python_name,
+    }
+
+    print("Imported module successfully!")
+    print(f"Name: {metadata['name']}")
+    print(f"Description: {metadata['description']}")
+    print(f"ID: {metadata['id']}")
+    print(f"Version: {metadata['version']}")
+    print("-------------------------------------------")
+    print("on_import() COMMAND :")
+
+    if on_import is not None:
+        print(output.getvalue(), end="")
+    else:
+        print("No on_import() function found.")
+
+
 accounts = load_accounts()
 current_account = None
 
@@ -46,7 +185,7 @@ print("Welcome to PythonOS.")
 print("Type 'help' for a list of available commands.")
 
 while True:
-    command = input("root@pythonOS> ")
+    command = input("root@pythonos> ")
 
     if command == "help":
         print(" ")
@@ -64,7 +203,7 @@ while True:
         print("user rename   - Change your PyOS Account name")
         print("rannum        - Prints a random number from 1 to 100")
         print("clear         - Clears the screen")
-        print("!!            - Activates the emergency protocol. Run this command only in cases of emergencys.")
+        print("!!            - Activates the emergency protocol.")
         print("import -help  - Prints help about the import command")
         print("what          - WHAT")
 
@@ -115,7 +254,6 @@ while True:
                 }
 
                 save_accounts(accounts)
-
                 current_account = accounts[account_id]
 
                 print(" ")
@@ -159,7 +297,6 @@ while True:
                 print("Username cannot be empty.")
             else:
                 current_account["username"] = new_username
-
                 save_accounts(accounts)
 
                 print("Username changed successfully!")
@@ -173,19 +310,41 @@ while True:
             os.system("cls")
         else:
             os.system("clear")
-    
+
     elif command == "!!":
         print("! EMERGENCY PROTOCOL ACTIVATED !")
         print("Shutting down PythonOS...")
         break
-    
+
     elif command == "import -help":
         print("import COMMAND HELP")
-        print("import -help")
-    
+        print("import <module_id> - Imports a module from the modules folder.")
+        print("Example: import test")
+
+    elif command == "import" or command.startswith("import "):
+        parts = command.split(maxsplit=1)
+
+        if len(parts) != 2 or not parts[1].strip():
+            print("Usage: import <module_id>")
+        else:
+            import_module(parts[1].strip())
+
     elif command == "what":
         print("WHAT")
 
     else:
-        print(f"Command not found: {command}")
-        print("Type 'help' for a list of available commands.")
+        # Built-in commands above always take priority.
+        if command in loaded_modules:
+            module = loaded_modules[command]["module"]
+            run_function = getattr(module, "run", None)
+
+            if not callable(run_function):
+                print(f"Module '{command}' has no run() function.")
+            else:
+                try:
+                    run_function()
+                except Exception as error:
+                    print(f"Module execution failed: {error}")
+        else:
+            print(f"Command not found: {command}")
+            print("Type 'help' for a list of available commands.")
