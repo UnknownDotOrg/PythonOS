@@ -6,16 +6,219 @@ import re
 import sys
 import io
 import importlib.util
-import urllib.request
-import urllib.error
 import tempfile
 import shutil
 import zipfile
+import urllib.request
+import urllib.error
 from contextlib import redirect_stdout
 from random import randint
 
-GITHUB_REPO = "UnknownDotOrg/PythonOS"
+import pkglib
+
+VERSION = "1.4.0"
 ACCOUNTS_FILE = "accounts.json"
+
+
+# Update metadata. Bump VERSION for each public release.
+VERSION = "1.3.0"
+GITHUB_REPO = "UnknownDotOrg/PythonOS"
+GITHUB_RAW_MAIN = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/main.py"
+GITHUB_SOURCE_ZIP = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.zip"
+
+
+def _version_tuple(version):
+    """Turn a dotted version into a tuple of integers for comparison."""
+    try:
+        return tuple(int(part) for part in version.strip().split("."))
+    except (AttributeError, TypeError, ValueError):
+        return ()
+
+
+def _ask_yes_no(prompt, default=False):
+    suffix = " [Y/n]: " if default else " [y/N]: "
+    answer = input(prompt + suffix).strip().lower()
+    if not answer:
+        return default
+    return answer in ("y", "yes")
+
+
+def update_pythonos():
+    """Check GitHub for a newer version and safely overlay its project files."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    print(f"Checking GitHub for PythonOS updates (current version: {VERSION})...")
+
+    try:
+        request = urllib.request.Request(
+            GITHUB_RAW_MAIN,
+            headers={"User-Agent": "PythonOS-Updater"}
+        )
+        with urllib.request.urlopen(request, timeout=20) as response:
+            remote_main = response.read(2_000_000).decode("utf-8")
+
+        match = re.search(
+            r'^\s*VERSION\s*=\s*["\']([0-9]+(?:\.[0-9]+)*)["\']',
+            remote_main,
+            re.MULTILINE
+        )
+        if not match:
+            print("Could not find VERSION in the GitHub main.py.")
+            print("The repository must contain the updater-enabled version before updates can be checked.")
+            return
+
+        latest_version = match.group(1)
+        current_key = _version_tuple(VERSION)
+        latest_key = _version_tuple(latest_version)
+
+        if not current_key or not latest_key:
+            print("Could not compare version numbers.")
+            return
+        if latest_key <= current_key:
+            if latest_key == current_key:
+                print(f"PythonOS {VERSION} is already up to date.")
+            else:
+                print(f"GitHub reports {latest_version}, which is not newer than {VERSION}.")
+            return
+
+        print(f"A newer version is available: PythonOS {latest_version}.")
+        if not _ask_yes_no("Download and install this update?"):
+            print("Update cancelled.")
+            return
+
+        keep_accounts = _ask_yes_no("Preserve your accounts.json file?", default=True)
+        keep_modules = _ask_yes_no("Preserve installed modules/packages in modules/?", default=True)
+
+        # These PkgLib settings and downloaded .pyospkg files are always preserved.
+        preserved = {"pkglib/config.json", "pkglib/downloaded-packaged"}
+        if keep_accounts:
+            preserved.add("accounts.json")
+        if keep_modules:
+            preserved.add("modules")
+
+        with tempfile.TemporaryDirectory(prefix="pythonos-update-") as temp_dir:
+            temp_root = os.path.abspath(temp_dir)
+            archive_path = os.path.join(temp_root, "source.zip")
+            extract_dir = os.path.join(temp_root, "source")
+            os.makedirs(extract_dir)
+
+            request = urllib.request.Request(
+                GITHUB_SOURCE_ZIP,
+                headers={"User-Agent": "PythonOS-Updater"}
+            )
+            with urllib.request.urlopen(request, timeout=60) as response:
+                archive_bytes = response.read(100_000_000 + 1)
+            if len(archive_bytes) > 100_000_000:
+                print("Update archive is too large; installation cancelled.")
+                return
+            with open(archive_path, "wb") as archive_file:
+                archive_file.write(archive_bytes)
+
+            with zipfile.ZipFile(archive_path, "r") as archive:
+                bad_member = archive.testzip()
+                if bad_member:
+                    print(f"Archive verification failed at {bad_member}; installation cancelled.")
+                    return
+
+                # Reject absolute paths and parent-directory traversal before extraction.
+                for member in archive.infolist():
+                    name = member.filename.replace("\\", "/")
+                    parts = name.split("/")
+                    if name.startswith("/") or any(part == ".." for part in parts):
+                        print("The update archive contains an unsafe path; installation cancelled.")
+                        return
+
+                archive.extractall(extract_dir)
+
+            # GitHub's branch ZIP has a generated top-level directory.
+            candidates = []
+            for root, dirs, files in os.walk(extract_dir):
+                if "main.py" in files:
+                    candidates.append(root)
+            if len(candidates) != 1:
+                print("Could not identify one PythonOS source folder in the archive.")
+                return
+            source_root = candidates[0]
+
+            staged_main = os.path.join(source_root, "main.py")
+            staged_text = open(staged_main, "r", encoding="utf-8").read()
+            staged_match = re.search(
+                r'^\s*VERSION\s*=\s*["\']([0-9]+(?:\.[0-9]+)*)["\']',
+                staged_text,
+                re.MULTILINE
+            )
+            if not staged_match or staged_match.group(1) != latest_version:
+                print("The repository changed while downloading; please try again.")
+                return
+
+            # Copy updated files into a staging folder first. Existing unrelated files
+            # are left untouched; preserved user data is not copied over.
+            stage_dir = os.path.join(temp_root, "staged")
+            os.makedirs(stage_dir)
+            for root, dirs, files in os.walk(source_root):
+                dirs[:] = [d for d in dirs if d != "__pycache__" and d != ".git"]
+                rel_root = os.path.relpath(root, source_root)
+                for filename in files:
+                    if filename.endswith(".pyc"):
+                        continue
+                    source_file = os.path.join(root, filename)
+                    rel_path = os.path.normpath(os.path.join(rel_root, filename))
+                    if rel_path == ".":
+                        rel_path = filename
+                    rel_posix = rel_path.replace(os.sep, "/")
+                    if any(
+                        rel_posix == item or rel_posix.startswith(item.rstrip("/") + "/")
+                        for item in preserved
+                    ):
+                        continue
+                    destination = os.path.join(stage_dir, rel_path)
+                    os.makedirs(os.path.dirname(destination), exist_ok=True)
+                    shutil.copy2(source_file, destination)
+
+            # Back up every file that will be overwritten. Roll back if any replacement fails.
+            backup_dir = os.path.join(temp_root, "backup")
+            os.makedirs(backup_dir)
+            changes = []
+            for root, dirs, files in os.walk(stage_dir):
+                for filename in files:
+                    staged_file = os.path.join(root, filename)
+                    rel_path = os.path.relpath(staged_file, stage_dir)
+                    target_file = os.path.join(base_dir, rel_path)
+                    backup_file = os.path.join(backup_dir, rel_path)
+                    os.makedirs(os.path.dirname(target_file), exist_ok=True)
+                    if os.path.isfile(target_file):
+                        os.makedirs(os.path.dirname(backup_file), exist_ok=True)
+                        shutil.copy2(target_file, backup_file)
+                        existed = True
+                    else:
+                        existed = False
+                    changes.append((staged_file, target_file, backup_file, existed))
+
+            installed = []
+            try:
+                # main.py is installed last so the updater can finish running first.
+                changes.sort(key=lambda item: (os.path.basename(item[1]) == "main.py", item[1]))
+                for staged_file, target_file, backup_file, existed in changes:
+                    shutil.copy2(staged_file, target_file)
+                    installed.append((target_file, backup_file, existed))
+            except Exception:
+                for target_file, backup_file, existed in reversed(installed):
+                    try:
+                        if existed and os.path.isfile(backup_file):
+                            shutil.copy2(backup_file, target_file)
+                        elif os.path.exists(target_file):
+                            os.remove(target_file)
+                    except OSError:
+                        pass
+                print("Update failed. The updater attempted to restore the previous files.")
+                return
+
+        print(f"PythonOS was updated to v{latest_version}!")
+        print("Restart PythonOS to use the new version.")
+        print("Your preserved accounts, installed modules, and PkgLib data were kept.")
+    except (OSError, urllib.error.URLError, TimeoutError, zipfile.BadZipFile) as error:
+        print(f"Update failed: {error}")
+        print("Your existing PythonOS files have not been intentionally removed.")
+
 
 # Modules successfully imported during this PythonOS session.
 loaded_modules = {}
@@ -172,177 +375,6 @@ def import_module(module_id):
         print("No on_import() function found.")
 
 
-
-def ask_yes_no(prompt):
-    while True:
-        answer = input(prompt).strip().lower()
-        if answer in ("y", "yes"):
-            return True
-        if answer in ("n", "no"):
-            return False
-        print("Please answer y or n.")
-
-
-def version_key(version):
-    numbers = re.findall(r"\d+", str(version))
-    return tuple(int(n) for n in numbers) if numbers else (0,)
-
-
-def update_pythonos():
-    print(f"Checking for updates on https://github.com/{GITHUB_REPO}...")
-    # PythonOS currently publishes source through the repository's main branch,
-    # not GitHub Releases. Read VERSION from the online main.py and download that
-    # branch's ZIP if it is newer.
-    version_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/main.py"
-    archive_url = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.zip"
-    request = urllib.request.Request(
-        version_url,
-        headers={"User-Agent": "PythonOS-Updater"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            online_main = response.read().decode("utf-8")
-        match = re.search("^VERSION\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"]", online_main, re.MULTILINE)
-        if not match:
-            raise ValueError("The GitHub main.py does not define VERSION yet.")
-        latest_version = match.group(1).strip()
-        if not latest_version:
-            raise ValueError("The GitHub main.py has an empty VERSION.")
-    except urllib.error.HTTPError as error:
-        print(f"Could not check GitHub (HTTP {error.code}).")
-        return
-    except (urllib.error.URLError, TimeoutError, UnicodeDecodeError, ValueError) as error:
-        print(f"Could not check for updates: {error}")
-        return
-
-    print(f"Current version: v{VERSION}")
-    print(f"Latest version:  {latest_version.lstrip('vV')}")
-    if version_key(latest_version) <= version_key(VERSION):
-        print("PythonOS is already up to date!")
-        return
-    print("An update is available!")
-    if not ask_yes_no("Download it? [y/n] "):
-        print("Update cancelled.")
-        return
-
-    keep_accounts = ask_yes_no(
-        "Keep current accounts in accounts.json and put them in the new version? [y/n] "
-    )
-    keep_packages = ask_yes_no(
-        "Keep current PythonOS packages and put them in the new version? [y/n] "
-    )
-
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    with tempfile.TemporaryDirectory(prefix="pythonos-update-") as work:
-        archive_path = os.path.join(work, "update.zip")
-        extracted = os.path.join(work, "extracted")
-        staged = os.path.join(work, "staged")
-        backup = os.path.join(work, "backup")
-        os.makedirs(extracted)
-        os.makedirs(staged)
-        os.makedirs(backup)
-
-        try:
-            print("Downloading update...")
-            download_request = urllib.request.Request(
-                archive_url, headers={"User-Agent": "PythonOS-Updater"}
-            )
-            with urllib.request.urlopen(download_request, timeout=60) as response:
-                with open(archive_path, "wb") as output:
-                    shutil.copyfileobj(response, output)
-
-            with zipfile.ZipFile(archive_path, "r") as archive:
-                if archive.testzip() is not None:
-                    raise ValueError("ZIP integrity check failed.")
-                root_real = os.path.realpath(extracted)
-                for member in archive.infolist():
-                    target = os.path.realpath(os.path.join(extracted, member.filename))
-                    if os.path.commonpath([root_real, target]) != root_real:
-                        raise ValueError("The archive contains an unsafe path.")
-                archive.extractall(extracted)
-
-            release_root = None
-            for root, dirs, names in os.walk(extracted):
-                if "main.py" in names and "README.txt" in names and "changelog" in names:
-                    release_root = root
-                    break
-            if release_root is None:
-                raise ValueError("This archive does not look like a PythonOS source release.")
-            if not os.path.isdir(os.path.join(release_root, "modules")):
-                raise ValueError("The release is missing its modules directory.")
-
-            for name in ("main.py", "README.txt", "changelog"):
-                shutil.copy2(os.path.join(release_root, name), os.path.join(staged, name))
-
-            release_accounts = os.path.join(release_root, "accounts.json")
-            current_accounts = os.path.join(base_dir, "accounts.json")
-            if keep_accounts and os.path.isfile(current_accounts):
-                shutil.copy2(current_accounts, os.path.join(staged, "accounts.json"))
-            elif os.path.isfile(release_accounts):
-                shutil.copy2(release_accounts, os.path.join(staged, "accounts.json"))
-            else:
-                with open(os.path.join(staged, "accounts.json"), "w", encoding="utf-8") as f:
-                    json.dump({}, f, indent=4)
-
-            current_modules = os.path.join(base_dir, "modules")
-            release_modules = os.path.join(release_root, "modules")
-            if keep_packages and os.path.isdir(current_modules):
-                shutil.copytree(current_modules, os.path.join(staged, "modules"))
-            else:
-                shutil.copytree(release_modules, os.path.join(staged, "modules"))
-
-            print("Download verified.")
-            print("Backing up current installation...")
-            managed = ["main.py", "README.txt", "changelog", "accounts.json", "modules"]
-            existed = {}
-            for name in managed:
-                current = os.path.join(base_dir, name)
-                existed[name] = os.path.exists(current)
-                saved = os.path.join(backup, name)
-                if os.path.isdir(current):
-                    shutil.copytree(current, saved)
-                elif os.path.isfile(current):
-                    shutil.copy2(current, saved)
-            print("Done!")
-            print("Installing update...")
-            try:
-                # Install program files last, so main.py is replaced at the end.
-                for name in ("modules", "accounts.json", "README.txt", "changelog", "main.py"):
-                    current = os.path.join(base_dir, name)
-                    prepared = os.path.join(staged, name)
-                    if os.path.isdir(current):
-                        shutil.rmtree(current)
-                    elif os.path.isfile(current):
-                        os.remove(current)
-                    if os.path.isdir(prepared):
-                        shutil.copytree(prepared, current)
-                    else:
-                        shutil.copy2(prepared, current)
-            except Exception:
-                print("Installation failed. Restoring the backup...")
-                for name in managed:
-                    current = os.path.join(base_dir, name)
-                    if os.path.isdir(current):
-                        shutil.rmtree(current)
-                    elif os.path.isfile(current):
-                        os.remove(current)
-                    saved = os.path.join(backup, name)
-                    if existed[name]:
-                        if os.path.isdir(saved):
-                            shutil.copytree(saved, current)
-                        elif os.path.isfile(saved):
-                            shutil.copy2(saved, current)
-                print("Backup restored. Your previous PythonOS files were kept.")
-                return
-
-            print("Done!")
-            print("Accounts preserved." if keep_accounts else "Previous accounts were not carried over.")
-            print("Packages preserved." if keep_packages else "Previous modules were replaced.")
-            print("Please restart PythonOS to use the update.")
-        except (OSError, urllib.error.URLError, zipfile.BadZipFile, ValueError, shutil.Error) as error:
-            print(f"Update failed: {error}")
-            print("Your current installation has not been replaced.")
-
 accounts = load_accounts()
 current_account = None
 
@@ -364,17 +396,13 @@ print("Type 'help' for a list of available commands.")
 while True:
     command = input("root@pythonos> ")
 
-    if command == "update":
-        update_pythonos()
-
-    elif command == "help":
+    if command == "help":
         print(" ")
         print("List of PythonOS commands")
         print(" ")
         print("help          - Prints a list of available commands")
         print("whoami        - Prints who the computer thinks you are.")
         print("about         - Prints things about the OS")
-        print("update        - Checks GitHub for PythonOS updates")
         print("other         - Prints other projects I made")
         print("exit          - Shuts down PythonOS")
         print("user          - See PyOS Account details")
@@ -387,13 +415,14 @@ while True:
         print("!!            - Activates the emergency protocol.")
         print("import -help  - Prints help about the import command")
         print("what          - WHAT")
-        print("update        - Updated PythonOS to the newest version.")
+        print("pkglib        - PyOS PkgLib package manager (type 'pkglib help')")
+        print("update        - Check GitHub for a newer PythonOS version")
 
     elif command == "whoami":
         print("root")
 
     elif command == "about":
-        print(f"PythonOS v1.3")
+        print("PythonOS v1.3")
         print("PythonOS is powered by PyTerminal.")
         print("PythonOS made by UnknownDotOrg.")
 
@@ -513,6 +542,12 @@ while True:
 
     elif command == "what":
         print("WHAT")
+
+    elif command == "update":
+        update_pythonos()
+
+    elif command == "pkglib" or command.startswith("pkglib "):
+        pkglib.handle_command(command)
 
     else:
         # Built-in commands above always take priority.
