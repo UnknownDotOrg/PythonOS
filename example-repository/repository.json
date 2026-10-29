@@ -1,0 +1,15 @@
+{
+    "name": "Example PyOS PkgLib Repository",
+    "version": 1,
+    "packages": [
+        {
+            "name": "Hello World",
+            "id": "hello",
+            "version": "1.0.0",
+            "author": "UnknownDotOrg",
+            "description": "A simple Hello World module for PythonOS.",
+            "url": "packages/hello-1.0.0.pyospkg",
+            "sha256": "711ffec8d13bbac93e42105077221f4ed2cd1aa073b8a9b2f68da79d97b34dbf"
+        }
+    ]
+}
