@@ -8,3 +8,4 @@ Update 0.4 : HUGE update right here : i made a module system with the import mod
 Update 1.0 : Yeah, huge step up from 0.4 but hey, PythonOS is now on GitHub!!!!! yay woohoo
 Update 1.1 : Added the "what" command and nothing else.
 Update 1.2 : Fixed the import system. You can use the import command with import <module ID>.
+Update 1.3: Added the update command.
