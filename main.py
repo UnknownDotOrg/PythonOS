@@ -16,7 +16,7 @@ from random import randint
 
 import pkglib
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 ACCOUNTS_FILE = "accounts.json"
 
 
