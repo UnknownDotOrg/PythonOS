@@ -422,7 +422,7 @@ while True:
         print("root")
 
     elif command == "about":
-        print("PythonOS v1.4.2)
+        print("PythonOS v1.4.2")
         print("PythonOS is powered by PyTerminal.")
         print("PythonOS made by UnknownDotOrg.")
 
