@@ -16,12 +16,12 @@ from random import randint
 
 import pkglib
 
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 ACCOUNTS_FILE = "accounts.json"
 
 
 # Update metadata. Bump VERSION for each public release.
-VERSION = "1.3.0"
+# removed other VERSION variable: it overwrote the actual version number.
 GITHUB_REPO = "UnknownDotOrg/PythonOS"
 GITHUB_RAW_MAIN = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/main.py"
 GITHUB_SOURCE_ZIP = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.zip"
@@ -422,7 +422,7 @@ while True:
         print("root")
 
     elif command == "about":
-        print("PythonOS v1.3")
+        print("PythonOS v1.4.2)
         print("PythonOS is powered by PyTerminal.")
         print("PythonOS made by UnknownDotOrg.")
 
